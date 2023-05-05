@@ -70,7 +70,7 @@ int main(int argc, char **argv) {
       printf(" %s", mtime);
     }
     if(status == 0 && (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name,"..")==0)) continue;
-    printf("   %s", entry->d_name);
+    printf("  %s", entry->d_name);
     if (status == 1) printf("\n");
   }
   if(status == 0) printf("\n");

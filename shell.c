@@ -12,7 +12,7 @@
 #include <readline/history.h>
 #include <readline/readline.h>
 
-char* bufferfile = "/home/csj/Desktop/shell/bufferfile.txt";
+char* bufferfile = "/home/csj/shell/myshell/bufferfile.txt";
 // function declaration
 // internal command
 char* cmd[] = {"cd", "exit"};
@@ -21,7 +21,7 @@ int Exit(char** token);
 int (*func[])(char**) = {&cd, &Exit};
 
 // split the line into tokens
-char** SplitLine(char* line, int* special);
+char** SplitLine(char* line, int* special,int* back);
 
 // execute the command
 int ExecuteLine(char** token);
@@ -39,16 +39,33 @@ int main() {
   char** tokens;
   int stdin_copy = dup(STDIN_FILENO);
   int stdout_copy = dup(STDOUT_FILENO);
-  int status = 1;   // 0: exit 1: continue
-  int special = 0;  // 0: normal,do not have '<>|' 1: special have '<>|'
+  int background = 0;  // 0: foreground 1: background
+  int status = 1;      // 0: exit 1: continue
+  int special = 0;     // 0: normal,do not have '<>|' 1: special have '<>|'
   while (1) {
     line = readline(">>");
     if (line == NULL) break;
     add_history(line);
-    tokens = SplitLine(line, &special);
+    tokens = SplitLine(line, &special, &background);
     if (tokens[0] == NULL) {
       free(line);
       continue;
+    }
+    if (background == 1) {
+      int pid = fork();
+      if (pid < 0) {
+        perror("fork error");
+      } else if (pid == 0) {
+        if (special == 1) {
+          status = ExecuteSpecialLine(tokens);
+          special = 0;
+        } else {
+          status = ExecuteLine(tokens);
+        }
+        break;
+      } else {
+        continue;
+      }
     }
     if (special == 1) {
       status = ExecuteSpecialLine(tokens);
@@ -91,7 +108,7 @@ int cd(char** token) {
 
 int Exit(char** token) { return 0; }
 
-char** SplitLine(char* line, int* special) {
+char** SplitLine(char* line, int* special, int* back) {
   char** tokens = (char**)malloc(sizeof(char*) * 10);
   tokens[0] = strtok(line, " ");
   int i = 0;
@@ -99,6 +116,9 @@ char** SplitLine(char* line, int* special) {
     if (strcmp(tokens[i], "|") == 0 || strcmp(tokens[i], ">") == 0 ||
         strcmp(tokens[i], ">>") == 0 || strcmp(tokens[i], "<") == 0) {
       *special = 1;
+    }
+    if (strcmp(tokens[i], "&") == 0) {
+      *back = 1;
     }
     tokens[++i] = strtok(NULL, " ");
   }
@@ -117,7 +137,7 @@ int ExecuteLine(char** token) {
     perror("fork error");
     return 1;
   } else if (fid == 0) {
-    char envp[50] = "/home/csj/Desktop/shell/env/";
+    char envp[50] = "/home/csj/shell/myshell/env/";
     strcat(envp, token[0]);
     token[0] = envp;
     if (execv(token[0], token) < 0) {
@@ -358,7 +378,7 @@ int ExecuteSpecialLine(char** token) {
 int relocate(int status, char** tokens,
              char* filename) {  // status 0: >  1: >> 2: <
   int fid;                      // fork id
-  if (status == 0) {  // do >
+  if (status == 0) {            // do >
     fid = fork();
     if (fid < 0) {
       perror("fork error");
@@ -378,10 +398,12 @@ int relocate(int status, char** tokens,
           putchar(ch);
         }
         fclose(openedfd);
+        openedfd = fopen(bufferfile, "w");
+        fclose(openedfd);
         exit(0);
       }
       // have command,so execute command
-      char envp[50] = "/home/csj/Desktop/shell/env/";
+      char envp[50] = "/home/csj/shell/myshell/env/";
       strcat(envp, tokens[0]);
       tokens[0] = envp;
       execv(tokens[0], tokens);
@@ -416,10 +438,12 @@ int relocate(int status, char** tokens,
           putchar(ch);
         }
         fclose(openedfd);
+        openedfd = fopen(bufferfile, "w");
+        fclose(openedfd);
         exit(0);
       }
       // have command,so execute command
-      char envp[50] = "/home/csj/Desktop/shell/env/";
+      char envp[50] = "/home/csj/shell/myshell/env/";
       strcat(envp, tokens[0]);
       tokens[0] = envp;
       execv(tokens[0], tokens);
@@ -445,6 +469,10 @@ int relocate(int status, char** tokens,
         exit(0);
       }
       int fd = open(filename, O_RDONLY);
+      if (fd < 0) {
+        // printf("commend error\n");
+        exit(0);
+      }
       dup2(fd, STDIN_FILENO);
       close(fd);
       int openfile = open(bufferfile, O_WRONLY | O_CREAT | O_TRUNC, 0666);
@@ -454,7 +482,7 @@ int relocate(int status, char** tokens,
       }
       dup2(openfile, STDOUT_FILENO);  // redirect output to bufferfile
       close(openfile);
-      char envp[50] = "/home/csj/Desktop/shell/env/";
+      char envp[50] = "/home/csj/shell/myshell/env/";
       strcat(envp, tokens[0]);
       tokens[0] = envp;
       execv(tokens[0], tokens);
@@ -495,14 +523,16 @@ int my_pipe(char** pre_tokens, char** post_tokens) {
         putchar(ch);
       }
       fclose(openedfd);
+      openedfd = fopen(bufferfile, "w");
+      fclose(openedfd);
       exit(0);
     }
-    char envp[50] = "/home/csj/Desktop/shell/env/";
+    char envp[50] = "/home/csj/shell/myshell/env/";
     strcat(envp, pre_tokens[0]);
     pre_tokens[0] = envp;
     execv(pre_tokens[0], pre_tokens);
     exit(1);
-  } else if (fid > 0) {  //post
+  } else if (fid > 0) {  // post
     int status;
     wait(&status);
     if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
@@ -522,7 +552,7 @@ int my_pipe(char** pre_tokens, char** post_tokens) {
         }
         dup2(openfile, STDOUT_FILENO);  // redirect output to bufferfile
         close(openfile);
-        char envp[50] = "/home/csj/Desktop/shell/env/";
+        char envp[50] = "/home/csj/shell/myshell/env/";
         strcat(envp, post_tokens[0]);
         post_tokens[0] = envp;
         execv(post_tokens[0], post_tokens);

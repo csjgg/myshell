@@ -34,7 +34,6 @@ int main(int argc, char *argv[]) {
     while ((ch = fgetc(fp)) != EOF) {
       putchar(ch);
     }
-    putchar('\n');
     fclose(fp);
     i++;
   }
