@@ -33,7 +33,7 @@ int main() {
       int pid = atoi(entry->d_name);
       char stat_path[256];
       sprintf(stat_path, "/proc/%d/stat", pid);
-      FILE *fp_stat = fopen(stat_path, "r");
+      FILE *fp_stat = fopen(stat_path, "r");  // open the stat file
       if (fp_stat) {
         char buf[2048];
         fgets(buf, sizeof(buf), fp_stat);
