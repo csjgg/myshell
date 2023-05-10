@@ -1,6 +1,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,11 +29,11 @@ int ExecuteSpecialLine(char** token);
 // output
 void outputpipe(int TopPipe[]);
 // relocate the output
-int relocate(int status, char** tokens,
-             char* filename,int toppipe[]);  // status 0: >  1: >> 2: <
+int relocate(int status, char** tokens, char* filename,
+             int toppipe[]);  // status 0: >  1: >> 2: <
 
 // pipe
-int my_pipe(char** pre_tokens, char** post_tokens,int toppipe[]);
+int my_pipe(char** pre_tokens, char** post_tokens, int toppipe[]);
 
 void SetTheEnv(void);
 
@@ -401,10 +402,10 @@ void outputpipe(int TopPipe[]) {
       write(STDOUT_FILENO, buf, n);
     }
     exit(0);
-  }else{
-    close(TopPipe[0]);
+  } else {
     close(TopPipe[1]);
     wait(NULL);
+    close(TopPipe[0]);
   }
 }
 
@@ -443,6 +444,7 @@ int relocate(int status, char** tokens, char* filename, int toppipe[]) {
       exit(1);
     } else if (fid > 0) {
       int status;
+      close(toppipe[1]);
       wait(&status);
       if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
         return 1;
@@ -463,7 +465,7 @@ int relocate(int status, char** tokens, char* filename, int toppipe[]) {
       if (tokens[0] == NULL) {  // no command,so must read input from pipe
         close(toppipe[1]);
         dup2(toppipe[0], STDIN_FILENO);
-        close(toppipe[0]);
+        // close(toppipe[0]);
         int len = 0;
         char buffer[1024];
         while ((len = read(STDIN_FILENO, buffer, 1024)) > 0) {
@@ -483,6 +485,7 @@ int relocate(int status, char** tokens, char* filename, int toppipe[]) {
       exit(1);
     } else if (fid > 0) {
       int status;
+      close(toppipe[1]);
       wait(&status);
       if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
         return 1;
@@ -510,7 +513,7 @@ int relocate(int status, char** tokens, char* filename, int toppipe[]) {
       close(fd);
       close(toppipe[0]);
       dup2(toppipe[1], STDOUT_FILENO);
-      close(toppipe[1]);
+      // close(toppipe[1]);
       execvp(tokens[0], tokens);
       exit(1);
     } else if (fid > 0) {
@@ -562,6 +565,7 @@ int my_pipe(char** pre_tokens, char** post_tokens, int TopPipe[]) {
     int status;
     wait(&status);
     if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+      close(fd[1]);
       int fid2 = fork();
       if (fid2 < 0) {
         perror("fork error");
