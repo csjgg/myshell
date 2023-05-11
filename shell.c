@@ -13,6 +13,8 @@
 #include <readline/history.h>
 #include <readline/readline.h>
 
+int fgjob;
+
 // function declaration
 // internal command
 char* cmd[] = {"cd", "exit"};
@@ -22,8 +24,8 @@ int (*func[])(char**) = {&cd, &Exit};
 
 // split the line into tokens
 char** SplitLine(char* line, int* special, int* back);
-
 // execute the command
+int internalcom(char** token);
 int ExecuteLine(char** token);
 int ExecuteSpecialLine(char** token);
 // output
@@ -36,15 +38,26 @@ int relocate(int status, char** tokens, char* filename,
 int my_pipe(char** pre_tokens, char** post_tokens, int toppipe[]);
 
 void SetTheEnv(void);
-
+void handler(int sig) {
+  if (fgjob != 0) {
+    killpg(fgjob, SIGINT);
+  } else {
+    printf("\n>>");
+  }
+}
 int main() {
   char* line;
   char** tokens;
   int background = 0;  // 0: foreground 1: background
   int status = 1;      // 0: exit 1: continue
   int special = 0;     // 0: normal,do not have '<>|' 1: special have '<>|'
+  int bg = 0;
+  int std_in = dup(STDIN_FILENO);
+  int std_out = dup(STDOUT_FILENO);
+  signal(SIGINT, handler);
   SetTheEnv();
   while (1) {
+    fgjob = 0;
     line = readline(">>");
     if (line == NULL) break;
     add_history(line);
@@ -53,33 +66,42 @@ int main() {
       free(line);
       continue;
     }
-    if (background == 1) {
-      int pid = fork();
-      if (pid < 0) {
-        perror("fork error");
-      } else if (pid == 0) {
-        if (special == 1) {
-          status = ExecuteSpecialLine(tokens);
-          special = 0;
-        } else {
-          status = ExecuteLine(tokens);
-        }
-        break;
-      } else {
+    status = internalcom(tokens);
+    if (status != -1) {
+      if (status == 0) break;
+      if (status == 1) {
         free(line);
         continue;
       }
     }
-    if (special == 1) {
-      status = ExecuteSpecialLine(tokens);
-      special = 0;
+    int fd = fork();
+    if (fd < 0) {
+      perror("fork error");
+    } else if (fd == 0) {
+      if (special == 1) {
+        status = ExecuteSpecialLine(tokens);
+        special = 0;
+      } else {
+        status = ExecuteLine(tokens);
+      }
+      exit(status);
     } else {
-      status = ExecuteLine(tokens);
+      if (background == 0) {
+        fgjob = fd;
+        printf("%d\n",fd);
+        wait(&status);
+        fflush(stdout);
+        killpg(fd, SIGINT);
+        if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+          break;
+        }
+      } else {
+        printf("(%d) %s\n", fd, tokens[0]);
+      }
+      background = 0;
     }
-
-    if (!status) {
-      break;
-    }
+    dup2(std_in, STDIN_FILENO);
+    dup2(std_out, STDOUT_FILENO);
     free(line);
   }
   unsetenv("PATH");
@@ -124,19 +146,23 @@ char** SplitLine(char* line, int* special, int* back) {
     }
     if (strcmp(tokens[i], "&") == 0) {
       *back = 1;
+      i--;
     }
     tokens[++i] = strtok(NULL, " ");
   }
   return tokens;
 }
 
-int ExecuteLine(char** token) {
+int internalcom(char** token) {
   int i = 0;
   for (i = 0; i < CMD_NUM; i++) {
     if (strcmp(token[0], cmd[i]) == 0) {
       return (*func[i])(token);
     }
-  }  // internal command
+  }
+  return -1;
+}
+int ExecuteLine(char** token) {
   int fid = fork();
   if (fid < 0) {
     perror("fork error");
@@ -152,7 +178,7 @@ int ExecuteLine(char** token) {
       return 1;
     }
   }
-  printf("Command not found:%s\n", token[0]);
+  printf(" %s not found or stopped\n", token[0]);
   return 1;
 }
 
@@ -161,6 +187,7 @@ int ExecuteSpecialLine(char** token) {
   char* pre_commend[10] = {NULL};
   char* post_commend[10] = {NULL};
   char* execute_tokens[2] = {NULL};
+  int output = 1;
   int sum = 0;
   int count = 0;
   int status = 1;
@@ -211,6 +238,7 @@ int ExecuteSpecialLine(char** token) {
         }
       }
     } else if (strcmp(pos, ">") == 0) {
+      output = 0;
       preorpost = 1;
       if (count == 0) {
         execute_tokens[count++] = ">";
@@ -250,6 +278,7 @@ int ExecuteSpecialLine(char** token) {
         }
       }
     } else if (strcmp(pos, ">>") == 0) {
+      output = 1;
       preorpost = 1;
       if (count == 0) {
         execute_tokens[count++] = ">>";
@@ -376,6 +405,7 @@ int ExecuteSpecialLine(char** token) {
       return 1;
     }
   }
+  if(output)
   outputpipe(TopPipe);
   return 1;
 }
@@ -387,11 +417,12 @@ void outputpipe(int TopPipe[]) {
     exit(1);
   } else if (fd == 0) {
     close(TopPipe[1]);
-    dup2(TopPipe[0], STDIN_FILENO);
-    close(TopPipe[0]);
     char buf[1024];
     int n;
-    while ((n = read(STDIN_FILENO, buf, 1024)) > 0) {
+    int flags = fcntl(TopPipe[0], F_GETFL);
+    flags |= O_NONBLOCK;
+    fcntl(TopPipe[0], F_SETFL, flags);
+    while ((n = read(TopPipe[0], buf, 1024)) > 0) {
       if (n < 0) {
         perror("read error");
         exit(1);
@@ -423,11 +454,12 @@ int relocate(int status, char** tokens, char* filename, int toppipe[]) {
       close(fd);
       if (tokens[0] == NULL) {  // no command,so must read input from pipe
         close(toppipe[1]);
-        dup2(toppipe[0], STDIN_FILENO);
-        close(toppipe[0]);
         char buffer[1024];
+        int flags = fcntl(toppipe[0], F_GETFL);
+        flags |= O_NONBLOCK;
+        fcntl(toppipe[0], F_SETFL, flags);
         int len = 0;
-        while ((len = read(STDIN_FILENO, buffer, 1024)) > 0) {
+        while ((len = read(toppipe[0], buffer, 1024)) > 0) {
           if (len == -1) {
             perror("read error");
             return 0;
@@ -464,11 +496,12 @@ int relocate(int status, char** tokens, char* filename, int toppipe[]) {
       close(fd);
       if (tokens[0] == NULL) {  // no command,so must read input from pipe
         close(toppipe[1]);
-        dup2(toppipe[0], STDIN_FILENO);
-        // close(toppipe[0]);
+        int flags = fcntl(toppipe[0], F_GETFL);
+        flags |= O_NONBLOCK;
+        fcntl(toppipe[0], F_SETFL, flags);
         int len = 0;
         char buffer[1024];
-        while ((len = read(STDIN_FILENO, buffer, 1024)) > 0) {
+        while ((len = read(toppipe[0], buffer, 1024)) > 0) {
           if (len == -1) {
             perror("read error");
             return 0;
@@ -513,7 +546,7 @@ int relocate(int status, char** tokens, char* filename, int toppipe[]) {
       close(fd);
       close(toppipe[0]);
       dup2(toppipe[1], STDOUT_FILENO);
-      // close(toppipe[1]);
+      close(toppipe[1]);
       execvp(tokens[0], tokens);
       exit(1);
     } else if (fid > 0) {
@@ -543,11 +576,12 @@ int my_pipe(char** pre_tokens, char** post_tokens, int TopPipe[]) {
     close(fd[1]);
     if (pre_tokens[0] == NULL) {  // no command,so must read input from file
       close(TopPipe[1]);
-      dup2(TopPipe[0], STDIN_FILENO);
-      close(TopPipe[0]);
+      int flags = fcntl(TopPipe[0], F_GETFL);
+      flags |= O_NONBLOCK;
+      fcntl(TopPipe[0], F_SETFL, flags);
       char buffer[1024];
       int len = 0;
-      while ((len = read(STDIN_FILENO, buffer, 1024)) > 0) {
+      while ((len = read(TopPipe[0], buffer, 1024)) > 0) {
         if (len == -1) {
           perror("read error");
           return 0;
