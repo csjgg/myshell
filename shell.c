@@ -51,7 +51,6 @@ int main() {
   int background = 0;  // 0: foreground 1: background
   int status = 1;      // 0: exit 1: continue
   int special = 0;     // 0: normal,do not have '<>|' 1: special have '<>|'
-  int bg = 0;
   int std_in = dup(STDIN_FILENO);
   int std_out = dup(STDOUT_FILENO);
   signal(SIGINT, handler);
@@ -64,6 +63,7 @@ int main() {
     tokens = SplitLine(line, &special, &background);
     if (tokens[0] == NULL) {
       free(line);
+      line = NULL;
       continue;
     }
     status = internalcom(tokens);
@@ -71,6 +71,7 @@ int main() {
       if (status == 0) break;
       if (status == 1) {
         free(line);
+        line = NULL;
         continue;
       }
     }
@@ -78,9 +79,9 @@ int main() {
     if (fd < 0) {
       perror("fork error");
     } else if (fd == 0) {
+      setpgid(0, 0);
       if (special == 1) {
         status = ExecuteSpecialLine(tokens);
-        special = 0;
       } else {
         status = ExecuteLine(tokens);
       }
@@ -88,21 +89,24 @@ int main() {
     } else {
       if (background == 0) {
         fgjob = fd;
-        printf("%d\n",fd);
+        // printf("%d\n",fd);
         wait(&status);
-        fflush(stdout);
-        killpg(fd, SIGINT);
+        //killpg(fd, SIGINT);
         if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
           break;
+        }else{
+          printf("OK\n");
         }
       } else {
         printf("(%d) %s\n", fd, tokens[0]);
       }
       background = 0;
+      special = 0;
     }
     dup2(std_in, STDIN_FILENO);
     dup2(std_out, STDOUT_FILENO);
     free(line);
+    line = NULL;
   }
   unsetenv("PATH");
   return 0;
@@ -168,6 +172,9 @@ int ExecuteLine(char** token) {
     perror("fork error");
     return 1;
   } else if (fid == 0) {
+    int a;
+    scanf("%d", &a);
+    printf("%d\n", a);
     if (execvp(token[0], token) < 0) {
       exit(1);
     }
