@@ -79,7 +79,7 @@ int main() {
     if (fd < 0) {
       perror("fork error");
     } else if (fd == 0) {
-      setpgid(0, 0);
+      // setpgid(0, 0);
       if (special == 1) {
         status = ExecuteSpecialLine(tokens);
       } else {
@@ -90,12 +90,12 @@ int main() {
       if (background == 0) {
         fgjob = fd;
         // printf("%d\n",fd);
-        wait(&status);
-        //killpg(fd, SIGINT);
+        waitpid(fd, &status, 0);
+        // killpg(fd, SIGINT);
         if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
           break;
-        }else{
-          printf("OK\n");
+        } else {
+          // printf("OK\n");
         }
       } else {
         printf("(%d) %s\n", fd, tokens[0]);
@@ -172,9 +172,6 @@ int ExecuteLine(char** token) {
     perror("fork error");
     return 1;
   } else if (fid == 0) {
-    int a;
-    scanf("%d", &a);
-    printf("%d\n", a);
     if (execvp(token[0], token) < 0) {
       exit(1);
     }
@@ -412,8 +409,7 @@ int ExecuteSpecialLine(char** token) {
       return 1;
     }
   }
-  if(output)
-  outputpipe(TopPipe);
+  if (output) outputpipe(TopPipe);
   return 1;
 }
 
