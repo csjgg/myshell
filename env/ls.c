@@ -153,6 +153,12 @@ void outputfile_l(char *path, char *name) {
   strftime(mtime, 80, "%b %2d %H:%M", localtime(&st.st_mtime));
 
   printf(" %s", mtime);
-  printf(" %s", name);
+  if(S_ISDIR(st.st_mode)){
+    printf(" \033[34m%s\033[0m", name);
+  }else if((st.st_mode & S_IXUSR)||(st.st_mode & S_IXGRP)||(st.st_mode & S_IXOTH)){
+    printf(" \033[32m%s\033[0m", name);}
+  else{
+    printf(" \033[33m%s\033[0m", name);
+  }
   printf("\n");
 }

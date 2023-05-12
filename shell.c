@@ -14,7 +14,7 @@
 #include <readline/readline.h>
 
 int fgjob;
-
+char* commend_line;
 // function declaration
 // internal command
 char* cmd[] = {"cd", "exit"};
@@ -29,6 +29,7 @@ int internalcom(char** token);
 int ExecuteLine(char** token);
 int ExecuteSpecialLine(char** token);
 // output
+char* commendline(void);
 void outputpipe(int TopPipe[]);
 // relocate the output
 int relocate(int status, char** tokens, char* filename,
@@ -42,7 +43,7 @@ void handler(int sig) {
   if (fgjob != 0) {
     killpg(fgjob, SIGINT);
   } else {
-    printf("\n>>");
+    printf("\n%s",commend_line);
   }
 }
 int main() {
@@ -57,7 +58,9 @@ int main() {
   SetTheEnv();
   while (1) {
     fgjob = 0;
-    line = readline(">>");
+    commend_line = commendline();
+    line = readline(commend_line);
+    free(commend_line);
     if (line == NULL) break;
     add_history(line);
     tokens = SplitLine(line, &special, &background);
@@ -80,6 +83,7 @@ int main() {
       perror("fork error");
     } else if (fd == 0) {
       // setpgid(0, 0);
+      //  printf("chid%d\n",getpgrp());
       if (special == 1) {
         status = ExecuteSpecialLine(tokens);
       } else {
@@ -90,6 +94,7 @@ int main() {
       if (background == 0) {
         fgjob = fd;
         // printf("%d\n",fd);
+        // printf("ffid%dfid%d\n",getpid(),getpgrp());
         waitpid(fd, &status, 0);
         // killpg(fd, SIGINT);
         if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
@@ -110,6 +115,71 @@ int main() {
   }
   unsetenv("PATH");
   return 0;
+}
+
+char* commendline(void) {
+  char* line = (char*)malloc(100);
+  char* red_color = (char*)malloc(6);
+  strcpy(red_color, "\033[31m");
+  char* reset_color = (char*)malloc(5);
+  strcpy(reset_color, "\033[0m");
+  char* green_color = (char*)malloc(6);
+  strcpy(green_color, "\033[32m");
+  char* blue_color = (char*)malloc(6);
+  strcpy(blue_color, "\033[34m");
+  // get the path
+  char* dir = (char*)malloc(70);
+  char* cwd;
+  cwd = getcwd(dir, 70);
+  if(cwd == NULL){
+    dir[0] = '\0';
+  }
+  char* home_dir = getenv("HOME");
+  if (home_dir) {
+    size_t home_dir_len = strlen(home_dir);
+    size_t path_len = strlen(dir);
+    if (path_len >= home_dir_len && strncmp(dir, home_dir, home_dir_len) == 0) {
+      // 将家目录部分替换为 "~"
+      memmove(dir, "~", 1);
+      memmove(dir + 1, dir + home_dir_len, path_len - home_dir_len + 1);
+    }
+  }
+  char* tmp = (char*)malloc(40);
+  strcpy(tmp, dir);
+  memmove(dir + 5, tmp, strlen(tmp) + 1);
+  memmove(dir, green_color, 5);
+  strcat(dir, reset_color);
+  free(tmp);
+  // get the user and computername
+  char* user = (char*)malloc(40);
+  char* username = getlogin();
+  if (username) {
+    strcpy(user, username);
+    strcat(user, "@");
+  }else{
+    user[0] = '\0';
+  }
+  char* hostname = (char*)malloc(20);
+  gethostname(hostname, sizeof(hostname));
+  hostname[8] = '\0';
+  // cat
+  strcpy(line, blue_color);
+  strcat(line, user);
+  free(user);
+  strcat(line, hostname);
+  free(hostname);
+  strcat(line, reset_color);
+  strcat(line, ":");
+  strcat(line, dir);
+  free(dir);
+  strcat(line, reset_color);
+  strcat(line, red_color);
+  strcat(line, "$ ");
+  strcat(line, reset_color);
+  free(blue_color);
+  free(red_color);
+  free(reset_color);
+  return line;
 }
 
 void SetTheEnv(void) {
@@ -175,6 +245,9 @@ int ExecuteLine(char** token) {
     if (execvp(token[0], token) < 0) {
       exit(1);
     }
+    // sleep(12);
+    // printf("ghid%d\n",getpgrp());
+    // exit(0);
   } else if (fid > 0) {
     int status;
     wait(&status);

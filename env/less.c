@@ -56,8 +56,8 @@ int main(int argc, char* argv[]) {
   while (1) {
     printf("%s", file_lines->line[row++]);
     rows_printed++;
-    if (rows_printed >= terminal_height || row >= file_lines->line_used) {
-      printf(":");
+    if (rows_printed >= terminal_height - 1 || row >= file_lines->line_used) {
+      printf("\n:");
       set_terminal_raw();
       commend = getchar();
       reset_terminal();
