@@ -9,12 +9,13 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <termios.h>
 #define CMD_NUM 2
 #include <readline/history.h>
 #include <readline/readline.h>
 
-int fgjob;
-char* commend_line;
+int fgjob;           // the job working
+char* commend_line;  // prompt
 // function declaration
 // internal command
 char* cmd[] = {"cd", "exit"};
@@ -25,9 +26,9 @@ int (*func[])(char**) = {&cd, &Exit};
 // split the line into tokens
 char** SplitLine(char* line, int* special, int* back);
 // execute the command
-int internalcom(char** token);
+int internalcom(char** token);  // build-in commends
 int ExecuteLine(char** token);
-int ExecuteSpecialLine(char** token);
+int ExecuteSpecialLine(char** token);  // commends have >/>>/|
 // output
 char* commendline(void);
 void outputpipe(int TopPipe[]);
@@ -37,15 +38,17 @@ int relocate(int status, char** tokens, char* filename,
 
 // pipe
 int my_pipe(char** pre_tokens, char** post_tokens, int toppipe[]);
-
+void reset_terminal();
 void SetTheEnv(void);
+// deal with ctrl C
 void handler(int sig) {
   if (fgjob != 0) {
-    killpg(fgjob, SIGINT);
+    killpg(fgjob, SIGTERM);
   } else {
-    printf("\n%s",commend_line);
+    printf("\n%s", commend_line);
   }
 }
+
 int main() {
   char* line;
   char** tokens;
@@ -58,17 +61,20 @@ int main() {
   SetTheEnv();
   while (1) {
     fgjob = 0;
+    // print the prompt and read commends
     commend_line = commendline();
     line = readline(commend_line);
     free(commend_line);
     if (line == NULL) break;
     add_history(line);
+    // split commends
     tokens = SplitLine(line, &special, &background);
     if (tokens[0] == NULL) {
       free(line);
       line = NULL;
       continue;
     }
+    // check build-in commends and execute
     status = internalcom(tokens);
     if (status != -1) {
       if (status == 0) break;
@@ -78,6 +84,7 @@ int main() {
         continue;
       }
     }
+    // other commends
     int fd = fork();
     if (fd < 0) {
       perror("fork error");
@@ -85,8 +92,10 @@ int main() {
       // setpgid(0, 0);
       //  printf("chid%d\n",getpgrp());
       if (special == 1) {
+        // have >/>>/|
         status = ExecuteSpecialLine(tokens);
       } else {
+        // normal
         status = ExecuteLine(tokens);
       }
       exit(status);
@@ -103,6 +112,7 @@ int main() {
           // printf("OK\n");
         }
       } else {
+        // background commends
         printf("(%d) %s\n", fd, tokens[0]);
       }
       background = 0;
@@ -117,6 +127,7 @@ int main() {
   return 0;
 }
 
+// get the prompt
 char* commendline(void) {
   char* line = (char*)malloc(100);
   char* red_color = (char*)malloc(6);
@@ -131,7 +142,7 @@ char* commendline(void) {
   char* dir = (char*)malloc(70);
   char* cwd;
   cwd = getcwd(dir, 70);
-  if(cwd == NULL){
+  if (cwd == NULL) {
     dir[0] = '\0';
   }
   char* home_dir = getenv("HOME");
@@ -156,7 +167,7 @@ char* commendline(void) {
   if (username) {
     strcpy(user, username);
     strcat(user, "@");
-  }else{
+  } else {
     user[0] = '\0';
   }
   char* hostname = (char*)malloc(20);
@@ -180,6 +191,13 @@ char* commendline(void) {
   free(red_color);
   free(reset_color);
   return line;
+}
+
+void reset_terminal() {
+  struct termios termios_p;
+  tcgetattr(STDIN_FILENO, &termios_p);
+  termios_p.c_lflag |= (ICANON | ECHO);
+  tcsetattr(STDIN_FILENO, TCSANOW, &termios_p);
 }
 
 void SetTheEnv(void) {
@@ -256,6 +274,7 @@ int ExecuteLine(char** token) {
     }
   }
   printf(" %s not found or stopped\n", token[0]);
+  reset_terminal();
   return 1;
 }
 

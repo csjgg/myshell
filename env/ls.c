@@ -43,7 +43,7 @@ int main(int argc, char **argv) {
       beginnum = 1;
     }
   }
-  for (i = beginnum; i < argc; i++) {
+  for (i = beginnum; i < argc; i++) {  // open the special dir
     if (beginnum&&beginnum !=1) {
       strcpy(path, argv[i]);
     }
@@ -63,7 +63,7 @@ int main(int argc, char **argv) {
             : maxwidth;
         num_files++;
       }
-      qsort(filenames, num_files, sizeof(char *), compare_names);
+      qsort(filenames, num_files, sizeof(char *), compare_names);  // sort the name by char order
       int linesize = 10;
       int filenum = 0;
       maxwidth += 2;
@@ -103,7 +103,7 @@ int main(int argc, char **argv) {
   }
 }
 
-int IS_DIR(char *path) {
+int IS_DIR(char *path) {  // judge dir
   struct stat st;
   if (stat(path, &st) != 0) {
     return 0;

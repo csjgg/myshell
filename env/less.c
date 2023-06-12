@@ -113,6 +113,7 @@ int main(int argc, char* argv[]) {
     }
   }
   fclose(fd);
+  reset_terminal();
   return 0;
 }
 
