@@ -58,7 +58,7 @@ int main(int argc, char **argv) {
       int maxwidth = 0;
       while ((entry = readdir(dir)) != NULL) {
         filenames[num_files] = strdup(entry->d_name);
-        strlen(filenames[num_files]) > maxwidth
+        (int)strlen(filenames[num_files]) > maxwidth
             ? maxwidth = strlen(filenames[num_files])
             : maxwidth;
         num_files++;
@@ -89,6 +89,7 @@ int main(int argc, char **argv) {
           filenum++;
         } else {
           outputfile_l(path, filenames[j]);
+          free(filenames[j]);
         }
       }
       closedir(dir);

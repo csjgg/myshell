@@ -1,4 +1,3 @@
-
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -8,36 +7,36 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
-#include <unistd.h>
 #include <termios.h>
+#include <unistd.h>
 #define CMD_NUM 2
+#include "prompt.h"
 #include <readline/history.h>
 #include <readline/readline.h>
 
-int fgjob;           // the job working
-char* commend_line;  // prompt
+int fgjob;          // the job working
+char *commend_line; // prompt
 // function declaration
 // internal command
-char* cmd[] = {"cd", "exit"};
-int cd(char** token);
-int Exit(char** token);
-int (*func[])(char**) = {&cd, &Exit};
+char *cmd[] = {"cd", "exit"};
+int cd(char **token);
+int Exit(char **token);
+int (*func[])(char **) = {&cd, &Exit};
 
 // split the line into tokens
-char** SplitLine(char* line, int* special, int* back);
+char **SplitLine(char *line, int *special, int *back);
 // execute the command
-int internalcom(char** token);  // build-in commends
-int ExecuteLine(char** token);
-int ExecuteSpecialLine(char** token);  // commends have >/>>/|
+int internalcom(char **token); // build-in commends
+int ExecuteLine(char **token);
+int ExecuteSpecialLine(char **token); // commends have >/>>/|
 // output
-char* commendline(void);
 void outputpipe(int TopPipe[]);
 // relocate the output
-int relocate(int status, char** tokens, char* filename,
-             int toppipe[]);  // status 0: >  1: >> 2: <
+int relocate(int status, char **tokens, char *filename,
+             int toppipe[]); // status 0: >  1: >> 2: <
 
 // pipe
-int my_pipe(char** pre_tokens, char** post_tokens, int toppipe[]);
+int my_pipe(char **pre_tokens, char **post_tokens, int toppipe[]);
 void reset_terminal();
 void SetTheEnv(void);
 // deal with ctrl C
@@ -50,11 +49,11 @@ void handler(int sig) {
 }
 
 int main() {
-  char* line;
-  char** tokens;
-  int background = 0;  // 0: foreground 1: background
-  int status = 1;      // 0: exit 1: continue
-  int special = 0;     // 0: normal,do not have '<>|' 1: special have '<>|'
+  char *line;
+  char **tokens;
+  int background = 0; // 0: foreground 1: background
+  int status = 1;     // 0: exit 1: continue
+  int special = 0;    // 0: normal,do not have '<>|' 1: special have '<>|'
   int std_in = dup(STDIN_FILENO);
   int std_out = dup(STDOUT_FILENO);
   signal(SIGINT, handler);
@@ -65,7 +64,8 @@ int main() {
     commend_line = commendline();
     line = readline(commend_line);
     free(commend_line);
-    if (line == NULL) break;
+    if (line == NULL)
+      break;
     add_history(line);
     // split commends
     tokens = SplitLine(line, &special, &background);
@@ -77,7 +77,8 @@ int main() {
     // check build-in commends and execute
     status = internalcom(tokens);
     if (status != -1) {
-      if (status == 0) break;
+      if (status == 0)
+        break;
       if (status == 1) {
         free(line);
         line = NULL;
@@ -127,72 +128,6 @@ int main() {
   return 0;
 }
 
-// get the prompt
-char* commendline(void) {
-  char* line = (char*)malloc(100);
-  char* red_color = (char*)malloc(6);
-  strcpy(red_color, "\033[31m");
-  char* reset_color = (char*)malloc(5);
-  strcpy(reset_color, "\033[0m");
-  char* green_color = (char*)malloc(6);
-  strcpy(green_color, "\033[32m");
-  char* blue_color = (char*)malloc(6);
-  strcpy(blue_color, "\033[34m");
-  // get the path
-  char* dir = (char*)malloc(70);
-  char* cwd;
-  cwd = getcwd(dir, 70);
-  if (cwd == NULL) {
-    dir[0] = '\0';
-  }
-  char* home_dir = getenv("HOME");
-  if (home_dir) {
-    size_t home_dir_len = strlen(home_dir);
-    size_t path_len = strlen(dir);
-    if (path_len >= home_dir_len && strncmp(dir, home_dir, home_dir_len) == 0) {
-      // 将家目录部分替换为 "~"
-      memmove(dir, "~", 1);
-      memmove(dir + 1, dir + home_dir_len, path_len - home_dir_len + 1);
-    }
-  }
-  char* tmp = (char*)malloc(40);
-  strcpy(tmp, dir);
-  memmove(dir + 5, tmp, strlen(tmp) + 1);
-  memmove(dir, green_color, 5);
-  strcat(dir, reset_color);
-  free(tmp);
-  // get the user and computername
-  char* user = (char*)malloc(40);
-  char* username = getlogin();
-  if (username) {
-    strcpy(user, username);
-    strcat(user, "@");
-  } else {
-    user[0] = '\0';
-  }
-  char* hostname = (char*)malloc(20);
-  gethostname(hostname, sizeof(hostname));
-  hostname[8] = '\0';
-  // cat
-  strcpy(line, blue_color);
-  strcat(line, user);
-  free(user);
-  strcat(line, hostname);
-  free(hostname);
-  strcat(line, reset_color);
-  strcat(line, ":");
-  strcat(line, dir);
-  free(dir);
-  strcat(line, reset_color);
-  strcat(line, red_color);
-  strcat(line, "$ ");
-  strcat(line, reset_color);
-  free(blue_color);
-  free(red_color);
-  free(reset_color);
-  return line;
-}
-
 void reset_terminal() {
   struct termios termios_p;
   tcgetattr(STDIN_FILENO, &termios_p);
@@ -201,20 +136,23 @@ void reset_terminal() {
 }
 
 void SetTheEnv(void) {
-  char* new_path = "/home/csj/shell/myshell/env";
-  char* old_path = getenv("PATH");
+  char *path_tmp = (char *)malloc(4096);
+  getcwd(path_tmp, 4096);
+  char *new_path = strcat(path_tmp, "/env");
+  char *old_path = getenv("PATH");
 
   if (old_path == NULL) {
     setenv("PATH", new_path, 1);
   } else {
-    char* path = (char*)malloc(strlen(old_path) + strlen(new_path) + 2);
+    char *path = (char *)malloc(strlen(old_path) + strlen(new_path) + 2);
     sprintf(path, "%s:%s", new_path, old_path);
     setenv("PATH", path, 1);
     free(path);
   }
+  free(path_tmp);
 }
 
-int cd(char** token) {
+int cd(char **token) {
   if (token[1] == NULL) {
     chdir("/home");
   } else {
@@ -225,10 +163,10 @@ int cd(char** token) {
   return 1;
 }
 
-int Exit(char** token) { return 0; }
+int Exit(char **token) { return 0; }
 
-char** SplitLine(char* line, int* special, int* back) {
-  char** tokens = (char**)malloc(sizeof(char*) * 10);
+char **SplitLine(char *line, int *special, int *back) {
+  char **tokens = (char **)malloc(sizeof(char *) * 10);
   tokens[0] = strtok(line, " ");
   int i = 0;
   while (tokens[i] != NULL) {
@@ -245,7 +183,7 @@ char** SplitLine(char* line, int* special, int* back) {
   return tokens;
 }
 
-int internalcom(char** token) {
+int internalcom(char **token) {
   int i = 0;
   for (i = 0; i < CMD_NUM; i++) {
     if (strcmp(token[0], cmd[i]) == 0) {
@@ -254,7 +192,7 @@ int internalcom(char** token) {
   }
   return -1;
 }
-int ExecuteLine(char** token) {
+int ExecuteLine(char **token) {
   int fid = fork();
   if (fid < 0) {
     perror("fork error");
@@ -278,20 +216,20 @@ int ExecuteLine(char** token) {
   return 1;
 }
 
-int ExecuteSpecialLine(char** token) {
-  char* special_tokens[] = {NULL};
-  char* pre_commend[10] = {NULL};
-  char* post_commend[10] = {NULL};
-  char* execute_tokens[2] = {NULL};
+int ExecuteSpecialLine(char **token) {
+  char *special_tokens[] = {NULL};
+  char *pre_commend[10] = {NULL};
+  char *post_commend[10] = {NULL};
+  char *execute_tokens[2] = {NULL};
   int output = 1;
   int sum = 0;
   int count = 0;
   int status = 1;
   int preorpost =
-      0;  // 0: pre 1: post  /to judge the commends put into (pre/post)
+      0; // 0: pre 1: post  /to judge the commends put into (pre/post)
   int TopPipe[2];
   pipe(TopPipe);
-  char* pos = token[sum];
+  char *pos = token[sum];
   // exxecute in the order of '<>|'
   while (pos != NULL) {
     if (strcmp(pos, "|") == 0) {
@@ -501,7 +439,8 @@ int ExecuteSpecialLine(char** token) {
       return 1;
     }
   }
-  if (output) outputpipe(TopPipe);
+  if (output)
+    outputpipe(TopPipe);
   return 1;
 }
 
@@ -535,10 +474,10 @@ void outputpipe(int TopPipe[]) {
   }
 }
 
-int relocate(int status, char** tokens, char* filename, int toppipe[]) {
+int relocate(int status, char **tokens, char *filename, int toppipe[]) {
   // status 0: >  1: >> 2: <
-  int fid;            // fork id
-  if (status == 0) {  // do >
+  int fid;           // fork id
+  if (status == 0) { // do >
     fid = fork();
     if (fid < 0) {
       perror("fork error");
@@ -547,7 +486,7 @@ int relocate(int status, char** tokens, char* filename, int toppipe[]) {
       int fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0666);
       dup2(fd, STDOUT_FILENO);
       close(fd);
-      if (tokens[0] == NULL) {  // no command,so must read input from pipe
+      if (tokens[0] == NULL) { // no command,so must read input from pipe
         close(toppipe[1]);
         char buffer[1024];
         int flags = fcntl(toppipe[0], F_GETFL);
@@ -580,7 +519,7 @@ int relocate(int status, char** tokens, char* filename, int toppipe[]) {
         return 0;
       }
     }
-  } else if (status == 1) {  // do >>
+  } else if (status == 1) { // do >>
     fid = fork();
     if (fid < 0) {
       perror("fork error");
@@ -589,7 +528,7 @@ int relocate(int status, char** tokens, char* filename, int toppipe[]) {
       int fd = open(filename, O_WRONLY | O_CREAT | O_APPEND, 0666);
       dup2(fd, STDOUT_FILENO);
       close(fd);
-      if (tokens[0] == NULL) {  // no command,so must read input from pipe
+      if (tokens[0] == NULL) { // no command,so must read input from pipe
         close(toppipe[1]);
         int flags = fcntl(toppipe[0], F_GETFL);
         flags |= O_NONBLOCK;
@@ -622,7 +561,7 @@ int relocate(int status, char** tokens, char* filename, int toppipe[]) {
         return 0;
       }
     }
-  } else if (status == 2) {  // do <
+  } else if (status == 2) { // do <
     fid = fork();
     if (fid < 0) {
       perror("fork error");
@@ -657,7 +596,7 @@ int relocate(int status, char** tokens, char* filename, int toppipe[]) {
   }
 }
 
-int my_pipe(char** pre_tokens, char** post_tokens, int TopPipe[]) {
+int my_pipe(char **pre_tokens, char **post_tokens, int TopPipe[]) {
   int stdfd = dup(0);
   int fd[2];
   pipe(fd);
@@ -665,11 +604,11 @@ int my_pipe(char** pre_tokens, char** post_tokens, int TopPipe[]) {
   if (fid < 0) {
     perror("fork error");
     return 1;
-  } else if (fid == 0) {  // write into pipe
+  } else if (fid == 0) { // write into pipe
     close(fd[0]);
     dup2(fd[1], STDOUT_FILENO);
     close(fd[1]);
-    if (pre_tokens[0] == NULL) {  // no command,so must read input from file
+    if (pre_tokens[0] == NULL) { // no command,so must read input from file
       close(TopPipe[1]);
       int flags = fcntl(TopPipe[0], F_GETFL);
       flags |= O_NONBLOCK;
@@ -690,7 +629,7 @@ int my_pipe(char** pre_tokens, char** post_tokens, int TopPipe[]) {
     }
     execvp(pre_tokens[0], pre_tokens);
     exit(1);
-  } else if (fid > 0) {  // post
+  } else if (fid > 0) { // post
     int status;
     wait(&status);
     if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
@@ -700,10 +639,11 @@ int my_pipe(char** pre_tokens, char** post_tokens, int TopPipe[]) {
         perror("fork error");
         return 0;
       } else if (fid2 == 0) {
-        close(fd[1]);  // read from pipe
+        close(fd[1]); // read from pipe
         dup2(fd[0], STDIN_FILENO);
         close(fd[0]);
-        if (post_tokens[0] == NULL) exit(1);
+        if (post_tokens[0] == NULL)
+          exit(1);
         close(TopPipe[0]);
         dup2(TopPipe[1], STDOUT_FILENO);
         close(TopPipe[1]);
