@@ -8,7 +8,7 @@
 
 
 // get the prompt
-char* commendline(void) {
+char* genprompt(void) {
   char* line = (char*)malloc(1024);
   char* red_color = (char*)malloc(6);
   strcpy(red_color, "\033[31m");

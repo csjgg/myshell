@@ -1,3 +1,3 @@
 #pragma once
 
-char* commendline(void);
+char* genprompt(void);

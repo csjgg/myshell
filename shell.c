@@ -1,143 +1,32 @@
-#include <errno.h>
 #include <fcntl.h>
-#include <signal.h>
+#include <linux/limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <sys/types.h>
 #include <sys/wait.h>
-#include <termios.h>
 #include <unistd.h>
-#define CMD_NUM 2
+
 #include "prompt.h"
+
 #include <readline/history.h>
 #include <readline/readline.h>
 
-int fgjob;          // the job working
-char *commend_line; // prompt
-// function declaration
-// internal command
-char *cmd[] = {"cd", "exit"};
-int cd(char **token);
-int Exit(char **token);
-int (*func[])(char **) = {&cd, &Exit};
+#define MAX_CMD_LENGTH 15
+#define MAX_JOB_NUM 10
 
-// split the line into tokens
-char **SplitLine(char *line, int *special, int *back);
-// execute the command
-int internalcom(char **token); // build-in commends
-int ExecuteLine(char **token);
-int ExecuteSpecialLine(char **token); // commends have >/>>/|
-// output
-void outputpipe(int TopPipe[]);
-// relocate the output
-int relocate(int status, char **tokens, char *filename,
-             int toppipe[]); // status 0: >  1: >> 2: <
+typedef struct job {
+  char *commends[MAX_CMD_LENGTH + 1];
+  int filed[3];
+  int valid;
+} job;
 
-// pipe
-int my_pipe(char **pre_tokens, char **post_tokens, int toppipe[]);
-void reset_terminal();
-void SetTheEnv(void);
-// deal with ctrl C
-void handler(int sig) {
-  if (fgjob != 0) {
-    killpg(fgjob, SIGTERM);
-  } else {
-    printf("\n%s", commend_line);
-  }
-}
-
-int main() {
-  char *line;
-  char **tokens;
-  int background = 0; // 0: foreground 1: background
-  int status = 1;     // 0: exit 1: continue
-  int special = 0;    // 0: normal,do not have '<>|' 1: special have '<>|'
-  int std_in = dup(STDIN_FILENO);
-  int std_out = dup(STDOUT_FILENO);
-  signal(SIGINT, handler);
-  SetTheEnv();
-  while (1) {
-    fgjob = 0;
-    // print the prompt and read commends
-    commend_line = commendline();
-    line = readline(commend_line);
-    free(commend_line);
-    if (line == NULL)
-      break;
-    add_history(line);
-    // split commends
-    tokens = SplitLine(line, &special, &background);
-    if (tokens[0] == NULL) {
-      free(line);
-      line = NULL;
-      continue;
-    }
-    // check build-in commends and execute
-    status = internalcom(tokens);
-    if (status != -1) {
-      if (status == 0)
-        break;
-      if (status == 1) {
-        free(line);
-        line = NULL;
-        continue;
-      }
-    }
-    // other commends
-    int fd = fork();
-    if (fd < 0) {
-      perror("fork error");
-    } else if (fd == 0) {
-      // setpgid(0, 0);
-      //  printf("chid%d\n",getpgrp());
-      if (special == 1) {
-        // have >/>>/|
-        status = ExecuteSpecialLine(tokens);
-      } else {
-        // normal
-        status = ExecuteLine(tokens);
-      }
-      exit(status);
-    } else {
-      if (background == 0) {
-        fgjob = fd;
-        // printf("%d\n",fd);
-        // printf("ffid%dfid%d\n",getpid(),getpgrp());
-        waitpid(fd, &status, 0);
-        // killpg(fd, SIGINT);
-        if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
-          break;
-        } else {
-          // printf("OK\n");
-        }
-      } else {
-        // background commends
-        printf("(%d) %s\n", fd, tokens[0]);
-      }
-      background = 0;
-      special = 0;
-    }
-    dup2(std_in, STDIN_FILENO);
-    dup2(std_out, STDOUT_FILENO);
-    free(line);
-    line = NULL;
-  }
-  unsetenv("PATH");
-  return 0;
-}
-
-void reset_terminal() {
-  struct termios termios_p;
-  tcgetattr(STDIN_FILENO, &termios_p);
-  termios_p.c_lflag |= (ICANON | ECHO);
-  tcsetattr(STDIN_FILENO, TCSANOW, &termios_p);
-}
-
-void SetTheEnv(void) {
-  char *path_tmp = (char *)malloc(4096);
-  getcwd(path_tmp, 4096);
+/*
+ * add my executealbe files' directory into the environment varible PATH
+ * return the old PATH
+ */
+char *SetTheEnv(void) {
+  char *path_tmp = (char *)malloc(PATH_MAX);
+  getcwd(path_tmp, PATH_MAX);
   char *new_path = strcat(path_tmp, "/env");
   char *old_path = getenv("PATH");
 
@@ -150,518 +39,241 @@ void SetTheEnv(void) {
     free(path);
   }
   free(path_tmp);
+  return old_path;
 }
 
-int cd(char **token) {
-  if (token[1] == NULL) {
-    chdir("/home");
-  } else {
-    if (chdir(token[1]) != 0) {
-      perror("cd wrong");
-    }
+void initjoblist(job *joblist) {
+  int i;
+  for (i = 0; i < MAX_JOB_NUM; i++) {
+    joblist[i].filed[0] = 0;
+    joblist[i].filed[1] = 1;
+    joblist[i].filed[2] = 2;
+    joblist[i].valid = 0;
   }
-  return 1;
 }
-
-int Exit(char **token) { return 0; }
-
-char **SplitLine(char *line, int *special, int *back) {
-  char **tokens = (char **)malloc(sizeof(char *) * 10);
-  tokens[0] = strtok(line, " ");
-  int i = 0;
-  while (tokens[i] != NULL) {
-    if (strcmp(tokens[i], "|") == 0 || strcmp(tokens[i], ">") == 0 ||
-        strcmp(tokens[i], ">>") == 0 || strcmp(tokens[i], "<") == 0) {
-      *special = 1;
+job *SplitLine(char *line, int *background, int *status) {
+  char *token;
+  *status = 1;
+  int job_num = 0;
+  int cmd_num = 0;
+  job *joblist = (job *)malloc(sizeof(job) * MAX_JOB_NUM);
+  initjoblist(joblist);
+  token = strtok(line, " ");
+  while (token != NULL) {
+    if (job_num > MAX_JOB_NUM) {
+      *status = 0;
+      printf("myshell: Only can handle max 15 jobs\n");
+      return joblist;
     }
-    if (strcmp(tokens[i], "&") == 0) {
-      *back = 1;
-      i--;
-    }
-    tokens[++i] = strtok(NULL, " ");
-  }
-  return tokens;
-}
-
-int internalcom(char **token) {
-  int i = 0;
-  for (i = 0; i < CMD_NUM; i++) {
-    if (strcmp(token[0], cmd[i]) == 0) {
-      return (*func[i])(token);
-    }
-  }
-  return -1;
-}
-int ExecuteLine(char **token) {
-  int fid = fork();
-  if (fid < 0) {
-    perror("fork error");
-    return 1;
-  } else if (fid == 0) {
-    if (execvp(token[0], token) < 0) {
-      exit(1);
-    }
-    // sleep(12);
-    // printf("ghid%d\n",getpgrp());
-    // exit(0);
-  } else if (fid > 0) {
-    int status;
-    wait(&status);
-    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
-      return 1;
-    }
-  }
-  printf(" %s not found or stopped\n", token[0]);
-  reset_terminal();
-  return 1;
-}
-
-int ExecuteSpecialLine(char **token) {
-  char *special_tokens[] = {NULL};
-  char *pre_commend[10] = {NULL};
-  char *post_commend[10] = {NULL};
-  char *execute_tokens[2] = {NULL};
-  int output = 1;
-  int sum = 0;
-  int count = 0;
-  int status = 1;
-  int preorpost =
-      0; // 0: pre 1: post  /to judge the commends put into (pre/post)
-  int TopPipe[2];
-  pipe(TopPipe);
-  char *pos = token[sum];
-  // exxecute in the order of '<>|'
-  while (pos != NULL) {
-    if (strcmp(pos, "|") == 0) {
-      preorpost = 1;
-      if (count == 0) {
-        execute_tokens[count++] = "|";
-      } else {
-        if (strcmp(execute_tokens[0], "|") == 0) {
-          execute_tokens[0] = "|";
-          status = my_pipe(pre_commend, post_commend, TopPipe);
-          pre_commend[0] = NULL;
-          post_commend[0] = NULL;
-          if (status == 0) {
-            return 1;
-          }
-        } else if (strcmp(execute_tokens[0], ">") == 0) {
-          execute_tokens[0] = "|";
-          status = relocate(0, pre_commend, post_commend[0], TopPipe);
-          pre_commend[0] = NULL;
-          post_commend[0] = NULL;
-          if (status == 0) {
-            return 1;
-          }
-        } else if (strcmp(execute_tokens[0], ">>") == 0) {
-          execute_tokens[0] = "|";
-          status = relocate(1, pre_commend, post_commend[0], TopPipe);
-          pre_commend[0] = NULL;
-          post_commend[0] = NULL;
-          if (status == 0) {
-            return 1;
-          }
-        } else if (strcmp(execute_tokens[0], "<") == 0) {
-          execute_tokens[0] = "|";
-          status = relocate(2, pre_commend, post_commend[0], TopPipe);
-          pre_commend[0] = NULL;
-          post_commend[0] = NULL;
-          if (status == 0) {
-            return 1;
-          }
-        }
+    if (strcmp(token, "|") == 0) {
+      joblist[job_num].commends[cmd_num] = NULL;
+      joblist[job_num].valid = 1;
+      int mpipe[2];
+      pipe(mpipe);
+      joblist[job_num].filed[1] = mpipe[1];
+      joblist[job_num + 1].filed[0] = mpipe[0];
+      cmd_num = 0;
+      job_num++;
+    } else if (strcmp(token, ">") == 0) {
+      joblist[job_num].commends[cmd_num] = NULL;
+      joblist[job_num].valid = 1;
+      char *filename = strtok(NULL, " ");
+      if (filename == NULL) {
+        printf("myshell: no filename\n");
+        *status = 0;
+        return joblist;
       }
-    } else if (strcmp(pos, ">") == 0) {
-      output = 0;
-      preorpost = 1;
-      if (count == 0) {
-        execute_tokens[count++] = ">";
-      } else {
-        if (strcmp(execute_tokens[0], "|") == 0) {
-          execute_tokens[0] = ">";
-          status = my_pipe(pre_commend, post_commend, TopPipe);
-          pre_commend[0] = NULL;
-          post_commend[0] = NULL;
-          if (status == 0) {
-            return 1;
-          }
-        } else if (strcmp(execute_tokens[0], ">") == 0) {
-          execute_tokens[0] = ">";
-          status = relocate(0, pre_commend, post_commend[0], TopPipe);
-          pre_commend[0] = NULL;
-          post_commend[0] = NULL;
-          if (status == 0) {
-            return 1;
-          }
-        } else if (strcmp(execute_tokens[0], ">>") == 0) {
-          execute_tokens[0] = ">";
-          status = relocate(1, pre_commend, post_commend[0], TopPipe);
-          pre_commend[0] = NULL;
-          post_commend[0] = NULL;
-          if (status == 0) {
-            return 1;
-          }
-        } else if (strcmp(execute_tokens[0], "<") == 0) {
-          execute_tokens[0] = ">";
-          status = relocate(2, pre_commend, post_commend[0], TopPipe);
-          pre_commend[0] = NULL;
-          post_commend[0] = NULL;
-          if (status == 0) {
-            return 1;
-          }
-        }
+      int fid = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+      if (fid == -1) {
+        *status = 0;
+        printf("myshell: can not open file\n");
+        return joblist;
       }
-    } else if (strcmp(pos, ">>") == 0) {
-      output = 1;
-      preorpost = 1;
-      if (count == 0) {
-        execute_tokens[count++] = ">>";
-      } else {
-        if (strcmp(execute_tokens[0], "|") == 0) {
-          execute_tokens[0] = ">>";
-          status = my_pipe(pre_commend, post_commend, TopPipe);
-          pre_commend[0] = NULL;
-          post_commend[0] = NULL;
-          if (status == 0) {
-            return 1;
-          }
-        } else if (strcmp(execute_tokens[0], ">") == 0) {
-          execute_tokens[0] = ">>";
-          status = relocate(0, pre_commend, post_commend[0], TopPipe);
-          pre_commend[0] = NULL;
-          post_commend[0] = NULL;
-          if (status == 0) {
-            return 1;
-          }
-        } else if (strcmp(execute_tokens[0], ">>") == 0) {
-          execute_tokens[0] = ">>";
-          status = relocate(1, pre_commend, post_commend[0], TopPipe);
-          pre_commend[0] = NULL;
-          post_commend[0] = NULL;
-          if (status == 0) {
-            return 1;
-          }
-        } else if (strcmp(execute_tokens[0], "<") == 0) {
-          execute_tokens[0] = ">>";
-          status = relocate(2, pre_commend, post_commend[0], TopPipe);
-          pre_commend[0] = NULL;
-          post_commend[0] = NULL;
-          if (status == 0) {
-            return 1;
-          }
-        }
+      joblist[job_num].filed[1] = fid;
+      cmd_num = 0;
+      job_num++;
+    } else if (strcmp(token, ">>") == 0) {
+      joblist[job_num].commends[cmd_num] = NULL;
+      joblist[job_num].valid = 1;
+      char *filename = strtok(NULL, " ");
+      if (filename == NULL) {
+        printf("myshell: no filename\n");
+        *status = 0;
+        return joblist;
       }
-    } else if (strcmp(pos, "<") == 0) {
-      preorpost = 1;
-      if (count == 0) {
-        execute_tokens[count++] = "<";
-      } else {
-        if (strcmp(execute_tokens[0], "|") == 0) {
-          execute_tokens[0] = "<";
-          status = my_pipe(pre_commend, post_commend, TopPipe);
-          pre_commend[0] = NULL;
-          post_commend[0] = NULL;
-          if (status == 0) {
-            return 1;
-          }
-        } else if (strcmp(execute_tokens[0], ">") == 0) {
-          execute_tokens[0] = "<";
-          status = relocate(0, pre_commend, post_commend[0], TopPipe);
-          pre_commend[0] = NULL;
-          post_commend[0] = NULL;
-          if (status == 0) {
-            return 1;
-          }
-        } else if (strcmp(execute_tokens[0], ">>") == 0) {
-          execute_tokens[0] = "<";
-          status = relocate(1, pre_commend, post_commend[0], TopPipe);
-          pre_commend[0] = NULL;
-          post_commend[0] = NULL;
-          if (status == 0) {
-            return 1;
-          }
-        } else if (strcmp(execute_tokens[0], "<") == 0) {
-          execute_tokens[0] = "<";
-          status = relocate(2, pre_commend, post_commend[0], TopPipe);
-          pre_commend[0] = NULL;
-          post_commend[0] = NULL;
-          if (status == 0) {
-            return 1;
-          }
-        }
+      int fid = open(filename, O_WRONLY | O_CREAT | O_APPEND, 0666);
+      if (fid == -1) {
+        *status = 0;
+        printf("myshell: can not open file\n");
+        return joblist;
       }
+      joblist[job_num].filed[1] = fid;
+      cmd_num = 0;
+      job_num++;
+    } else if (strcmp(token, "<") == 0) {
+      joblist[job_num].commends[cmd_num] = NULL;
+      joblist[job_num].valid = 1;
+      char *filename = strtok(NULL, " ");
+      if (filename == NULL) {
+        printf("myshell: no filename\n");
+        *status = 0;
+        return joblist;
+      }
+      int fid = open(filename, O_RDONLY);
+      if (fid == -1) {
+        *status = 0;
+        printf("myshell: can not open file\n");
+        return joblist;
+      }
+      joblist[job_num].filed[0] = fid;
+      cmd_num = 0;
+      job_num++;
+    } else if (strcmp(token, "&") == 0) {
+      joblist[job_num].commends[cmd_num] = NULL;
+      joblist[job_num].valid = 1;
+      *background = 1;
+      job_num++;
+      cmd_num = 0;
+    } else if (strcmp(token, "&&") == 0) {
+      joblist[job_num].commends[cmd_num] = NULL;
+      joblist[job_num].valid = 1;
+      cmd_num = 0;
+      job_num++;
     } else {
-      if (preorpost == 0) {
-        int i = 0;
-        while (pre_commend[i] != NULL) {
-          i++;
-        }
-        pre_commend[i] = pos;
-        pre_commend[i + 1] = NULL;
-      } else {
-        int i = 0;
-        while (post_commend[i] != NULL) {
-          i++;
-        }
-        post_commend[i] = pos;
-        post_commend[i + 1] = NULL;
+      joblist[job_num].commends[cmd_num] = token;
+      cmd_num++;
+    }
+    token = strtok(NULL, " ");
+  }
+  if (cmd_num != 0) {
+    joblist[job_num].commends[cmd_num] = NULL;
+    joblist[job_num].valid = 1;
+  }
+  return joblist;
+}
+
+void Closefiles(job *joblist) {
+  int i;
+  for (i = 0; i < MAX_JOB_NUM; i++) {
+    if (joblist[i].filed[0] != 0) {
+      close(joblist[i].filed[0]);
+    }
+    if (joblist[i].filed[1] != 1) {
+      close(joblist[i].filed[1]);
+    }
+    if (joblist[i].filed[2] != 2) {
+      close(joblist[i].filed[2]);
+    }
+  }
+}
+
+int execute_cmd(job *joblist) {
+  // int i = 0;
+  // while (joblist[i].valid == 1) {
+  //   int cmd_num = 0;
+  //   while (joblist[i].commends[cmd_num] != NULL) {
+  //     printf("%s\n", joblist[i].commends[cmd_num]);
+  //     cmd_num++;
+  //   }
+  //   printf("%d %d %d", joblist[i].filed[0], joblist[i].filed[1],
+  //          joblist[i].filed[2]);
+  //   printf("\n");
+  //   i++;
+  // }
+  int job_n = 0;
+  for (job_n = 0; joblist[job_n].valid == 1; job_n++) {
+    int fd = fork();
+    if (fd < 0) {
+      perror("fork error");
+      return 1;
+    } else if (fd == 0) {
+      if(joblist[job_n].filed[1]!=1){
+        dup2(joblist[job_n].filed[1],1);
+      }
+      if(joblist[job_n].filed[0]!=0){
+        dup2(joblist[job_n].filed[0],0);
+      }
+      execvp(joblist[job_n].commends[0],joblist[job_n].commends);
+      printf("worng\n");
+      exit(-1);
+    } else if (fd > 0) {
+      int status;
+      if(joblist[job_n].filed[1]!=1){
+        close(joblist[job_n].filed[1]);
+      }
+      if(joblist[job_n].filed[0]!=0){
+        close(joblist[job_n].filed[0]);
+      }
+      waitpid(fd,&status,0);
+      if (WIFEXITED(status) && WEXITSTATUS(status) == -1) {
+        printf("myshell: execute fail\n");
+        return 1;
       }
     }
-    pos = token[++sum];
   }
-  // deal with the last commend
-  if (strcmp(execute_tokens[0], "|") == 0) {
-    status = my_pipe(pre_commend, post_commend, TopPipe);
-    pre_commend[0] = NULL;
-    post_commend[0] = NULL;
-    if (status == 0) {
-      return 1;
-    }
-  } else if (strcmp(execute_tokens[0], ">") == 0) {
-    status = relocate(0, pre_commend, post_commend[0], TopPipe);
-    pre_commend[0] = NULL;
-    post_commend[0] = NULL;
-    if (status == 0) {
-      return 1;
-    }
-  } else if (strcmp(execute_tokens[0], ">>") == 0) {
-    status = relocate(1, pre_commend, post_commend[0], TopPipe);
-    pre_commend[0] = NULL;
-    post_commend[0] = NULL;
-    if (status == 0) {
-      return 1;
-    }
-  } else if (strcmp(execute_tokens[0], "<") == 0) {
-    status = relocate(2, pre_commend, post_commend[0], TopPipe);
-    pre_commend[0] = NULL;
-    post_commend[0] = NULL;
-    if (status == 0) {
-      return 1;
-    }
-  }
-  if (output)
-    outputpipe(TopPipe);
   return 1;
 }
 
-void outputpipe(int TopPipe[]) {
-  int fd = fork();
-  if (fd < 0) {
-    perror("fork error");
-    exit(1);
-  } else if (fd == 0) {
-    close(TopPipe[1]);
-    char buf[1024];
-    int n;
-    int flags = fcntl(TopPipe[0], F_GETFL);
-    flags |= O_NONBLOCK;
-    fcntl(TopPipe[0], F_SETFL, flags);
-    while ((n = read(TopPipe[0], buf, 1024)) > 0) {
-      if (n < 0) {
-        perror("read error");
-        exit(1);
-      }
-      if (n == 0) {
-        break;
-      }
-      write(STDOUT_FILENO, buf, n);
-    }
-    exit(0);
-  } else {
-    close(TopPipe[1]);
-    wait(NULL);
-    close(TopPipe[0]);
-  }
-}
+int main() {
+  char *line;
+  job *joblist;
+  int background = 0; // 0: foreground 1: background
+  int status = 1;     // 0: exit 1: continue
+  char *prompt;
+  char *old_path = SetTheEnv();
 
-int relocate(int status, char **tokens, char *filename, int toppipe[]) {
-  // status 0: >  1: >> 2: <
-  int fid;           // fork id
-  if (status == 0) { // do >
-    fid = fork();
-    if (fid < 0) {
-      perror("fork error");
-      return 0;
-    } else if (fid == 0) {
-      int fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-      dup2(fd, STDOUT_FILENO);
-      close(fd);
-      if (tokens[0] == NULL) { // no command,so must read input from pipe
-        close(toppipe[1]);
-        char buffer[1024];
-        int flags = fcntl(toppipe[0], F_GETFL);
-        flags |= O_NONBLOCK;
-        fcntl(toppipe[0], F_SETFL, flags);
-        int len = 0;
-        while ((len = read(toppipe[0], buffer, 1024)) > 0) {
-          if (len == -1) {
-            perror("read error");
-            return 0;
-          }
-          if (len == 0) {
-            break;
-          }
-          write(STDOUT_FILENO, buffer, len);
-        }
-        exit(0);
-      }
-      // have command,so execute command
-      execvp(tokens[0], tokens);
-      exit(1);
-    } else if (fid > 0) {
-      int status;
-      close(toppipe[1]);
-      wait(&status);
-      if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
-        return 1;
-      } else {
-        printf("commend error\n");
-        return 0;
-      }
+  while (1) {
+    // print the prompt and read commends
+    prompt = genprompt();
+    line = readline(prompt);
+    free(prompt);
+    if (line == NULL)
+      break;
+    add_history(line);
+    // split commends, deal with file descripter
+    joblist = SplitLine(line, &background, &status);
+    if (joblist == NULL) {
+      free(line);
+      line = NULL;
+      continue;
     }
-  } else if (status == 1) { // do >>
-    fid = fork();
-    if (fid < 0) {
-      perror("fork error");
-      return 0;
-    } else if (fid == 0) {
-      int fd = open(filename, O_WRONLY | O_CREAT | O_APPEND, 0666);
-      dup2(fd, STDOUT_FILENO);
-      close(fd);
-      if (tokens[0] == NULL) { // no command,so must read input from pipe
-        close(toppipe[1]);
-        int flags = fcntl(toppipe[0], F_GETFL);
-        flags |= O_NONBLOCK;
-        fcntl(toppipe[0], F_SETFL, flags);
-        int len = 0;
-        char buffer[1024];
-        while ((len = read(toppipe[0], buffer, 1024)) > 0) {
-          if (len == -1) {
-            perror("read error");
-            return 0;
-          }
-          if (len == 0) {
-            break;
-          }
-          write(STDOUT_FILENO, buffer, len);
-        }
-        exit(0);
-      }
-      // have command,so execute command
-      execvp(tokens[0], tokens);
-      exit(1);
-    } else if (fid > 0) {
-      int status;
-      close(toppipe[1]);
-      wait(&status);
-      if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
-        return 1;
-      } else {
-        printf("commend error\n");
-        return 0;
-      }
+    if (status == 0) {
+      free(joblist);
+      free(line);
+      Closefiles(joblist);
+      continue;
     }
-  } else if (status == 2) { // do <
-    fid = fork();
-    if (fid < 0) {
+    // execute commends
+    int fd = fork();
+    if (fd < 0) {
       perror("fork error");
-      return 0;
-    } else if (fid == 0) {
-      if (tokens[0] == NULL) {
-        printf("commend error\n");
-        exit(0);
-      }
-      int fd = open(filename, O_RDONLY);
-      if (fd < 0) {
-        // printf("commend error\n");
-        exit(0);
-      }
-      dup2(fd, STDIN_FILENO);
-      close(fd);
-      close(toppipe[0]);
-      dup2(toppipe[1], STDOUT_FILENO);
-      close(toppipe[1]);
-      execvp(tokens[0], tokens);
-      exit(1);
-    } else if (fid > 0) {
-      int status;
-      wait(&status);
-      if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
-        return 1;
-      } else {
-        printf("commend error\n");
-        return 0;
-      }
-    }
-  }
-}
-
-int my_pipe(char **pre_tokens, char **post_tokens, int TopPipe[]) {
-  int stdfd = dup(0);
-  int fd[2];
-  pipe(fd);
-  int fid = fork();
-  if (fid < 0) {
-    perror("fork error");
-    return 1;
-  } else if (fid == 0) { // write into pipe
-    close(fd[0]);
-    dup2(fd[1], STDOUT_FILENO);
-    close(fd[1]);
-    if (pre_tokens[0] == NULL) { // no command,so must read input from file
-      close(TopPipe[1]);
-      int flags = fcntl(TopPipe[0], F_GETFL);
-      flags |= O_NONBLOCK;
-      fcntl(TopPipe[0], F_SETFL, flags);
-      char buffer[1024];
-      int len = 0;
-      while ((len = read(TopPipe[0], buffer, 1024)) > 0) {
-        if (len == -1) {
-          perror("read error");
-          return 0;
-        }
-        if (len == 0) {
+    } else if (fd == 0) {
+      status = execute_cmd(joblist);
+      exit(status);
+    } else {
+      Closefiles(joblist);
+      // if do not work in background, wait it exit
+      if (background == 0) {
+        waitpid(fd, &status, 0);
+        if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
           break;
-        }
-        write(STDOUT_FILENO, buffer, len);
-      }
-      exit(0);
-    }
-    execvp(pre_tokens[0], pre_tokens);
-    exit(1);
-  } else if (fid > 0) { // post
-    int status;
-    wait(&status);
-    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
-      close(fd[1]);
-      int fid2 = fork();
-      if (fid2 < 0) {
-        perror("fork error");
-        return 0;
-      } else if (fid2 == 0) {
-        close(fd[1]); // read from pipe
-        dup2(fd[0], STDIN_FILENO);
-        close(fd[0]);
-        if (post_tokens[0] == NULL)
-          exit(1);
-        close(TopPipe[0]);
-        dup2(TopPipe[1], STDOUT_FILENO);
-        close(TopPipe[1]);
-        execvp(post_tokens[0], post_tokens);
-        exit(1);
-      } else if (fid2 > 0) {
-        int status2;
-        wait(&status2);
-        if (WIFEXITED(status2) && WEXITSTATUS(status2) == 0) {
-          return 1;
         } else {
-          printf("commend error\n");
-          return 0;
+          // printf("OK\n");
         }
+      } else {
+        printf("(%d) %s\n", fd, joblist[0].commends[0]);
       }
-    } else {
-      printf("commend error\n");
-      return 0;
+      background = 0;
     }
+    free(joblist);
+    free(line);
+    line = NULL;
   }
+  // reset the PATH
+  if (old_path == NULL) {
+    unsetenv("PATH");
+  } else {
+    setenv("PATH", old_path, 1);
+  }
+  return 0;
 }
