@@ -9,5 +9,6 @@ int main(int argc, char** argv) {
     perror("pwd error");
   else
     printf("%s\n", cwd);
+  free(buff);
   return 0;
 }

@@ -12,4 +12,4 @@ add_executable(shell ${SRC_LIST})
 
 target_link_libraries(shell readline)
 
-# add_subdirectory(env)
+add_subdirectory(env)

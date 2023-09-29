@@ -59,7 +59,10 @@ char* genprompt(void) {
   }
 
   // cat
-  strcpy(line, blue_color);
+  strcpy(line, red_color);
+  strcat(line, "[");
+  strcat(line, reset_color);
+  strcat(line, blue_color);
   strcat(line, user);
   free(user);
   strcat(line, hostname);
@@ -70,7 +73,7 @@ char* genprompt(void) {
   free(dir);
   strcat(line, reset_color);
   strcat(line, red_color);
-  strcat(line, "$ ");
+  strcat(line, "]\n");
   strcat(line, reset_color);
   free(blue_color);
   free(red_color);

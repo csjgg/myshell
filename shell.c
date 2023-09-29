@@ -1,12 +1,12 @@
+#include "prompt.h"
 #include <fcntl.h>
 #include <linux/limits.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
-
-#include "prompt.h"
 
 #include <readline/history.h>
 #include <readline/readline.h>
@@ -19,6 +19,24 @@ typedef struct job {
   int filed[3];
   int valid;
 } job;
+
+/*
+ * builtin commends
+ */
+char *cmd[] = {"cd", "exit"};
+int Exit(void) { return -1; }
+
+int cd(char **token) {
+  if (token[1] == NULL) {
+    chdir("/home");
+  } else {
+    if (chdir(token[1]) != 0) {
+      perror("myshell: cd wrong");
+      return 0;
+    }
+  }
+  return 1;
+}
 
 /*
  * add my executealbe files' directory into the environment varible PATH
@@ -42,6 +60,9 @@ char *SetTheEnv(void) {
   return old_path;
 }
 
+/*
+ * init the joblist, make sure jobs' file descripters is right
+ */
 void initjoblist(job *joblist) {
   int i;
   for (i = 0; i < MAX_JOB_NUM; i++) {
@@ -51,6 +72,10 @@ void initjoblist(job *joblist) {
     joblist[i].valid = 0;
   }
 }
+
+/*
+ * split commends into jobs and deal with the file descripters
+ */
 job *SplitLine(char *line, int *background, int *status) {
   char *token;
   *status = 1;
@@ -152,6 +177,10 @@ job *SplitLine(char *line, int *background, int *status) {
   return joblist;
 }
 
+/*
+ * check the job list, and close all opened file, to make sure i/o is correct in
+ * child process
+ */
 void Closefiles(job *joblist) {
   int i;
   for (i = 0; i < MAX_JOB_NUM; i++) {
@@ -167,47 +196,65 @@ void Closefiles(job *joblist) {
   }
 }
 
-int execute_cmd(job *joblist) {
-  // int i = 0;
-  // while (joblist[i].valid == 1) {
-  //   int cmd_num = 0;
-  //   while (joblist[i].commends[cmd_num] != NULL) {
-  //     printf("%s\n", joblist[i].commends[cmd_num]);
-  //     cmd_num++;
-  //   }
-  //   printf("%d %d %d", joblist[i].filed[0], joblist[i].filed[1],
-  //          joblist[i].filed[2]);
-  //   printf("\n");
-  //   i++;
-  // }
+/*
+ * execute jobs in the order of job list
+ */
+int execute_cmd(job *joblist, int background) {
   int job_n = 0;
+  int status;
+  int fd;
   for (job_n = 0; joblist[job_n].valid == 1; job_n++) {
-    int fd = fork();
-    if (fd < 0) {
-      perror("fork error");
-      return 1;
-    } else if (fd == 0) {
-      if(joblist[job_n].filed[1]!=1){
-        dup2(joblist[job_n].filed[1],1);
-      }
-      if(joblist[job_n].filed[0]!=0){
-        dup2(joblist[job_n].filed[0],0);
-      }
-      execvp(joblist[job_n].commends[0],joblist[job_n].commends);
-      printf("worng\n");
-      exit(-1);
-    } else if (fd > 0) {
-      int status;
-      if(joblist[job_n].filed[1]!=1){
+    if (strcmp(joblist[job_n].commends[0], "cd") == 0) {
+      status = cd(joblist[job_n].commends);
+      if (joblist[job_n].filed[1] != 1) {
         close(joblist[job_n].filed[1]);
       }
-      if(joblist[job_n].filed[0]!=0){
+      if (joblist[job_n].filed[0] != 0) {
         close(joblist[job_n].filed[0]);
       }
-      waitpid(fd,&status,0);
-      if (WIFEXITED(status) && WEXITSTATUS(status) == -1) {
-        printf("myshell: execute fail\n");
+      if (status == 0) {
         return 1;
+      } else {
+        continue;
+      }
+    } else if (strcmp(joblist[job_n].commends[0], "exit") == 0) {
+      return Exit();
+    } else {
+      fd = fork();
+      if (fd < 0) {
+        perror("fork error");
+        return 1;
+      } else if (fd == 0) {
+        if (background == 0) {
+          signal(SIGINT, SIG_DFL);
+        }
+        if (joblist[job_n].filed[1] != 1) {
+          dup2(joblist[job_n].filed[1], 1);
+        }
+        if (joblist[job_n].filed[0] != 0) {
+          dup2(joblist[job_n].filed[0], 0);
+        }
+        execvp(joblist[job_n].commends[0], joblist[job_n].commends);
+        // printf("worng\n");
+        exit(22);
+      } else if (fd > 0) {
+        int status;
+        if (joblist[job_n].filed[1] != 1) {
+          close(joblist[job_n].filed[1]);
+        }
+        if (joblist[job_n].filed[0] != 0) {
+          close(joblist[job_n].filed[0]);
+        }
+        waitpid(fd, &status, 0);
+        if (WIFEXITED(status) && WEXITSTATUS(status) == 22) {
+          printf("myshell: execute failed / no such commend\n");
+          return 1;
+        }
+        if (WIFSIGNALED(status)) {
+          int signal_number = WTERMSIG(status);
+          printf("Child process terminated by signal %d\n", signal_number);
+          return 1;
+        }
       }
     }
   }
@@ -221,11 +268,13 @@ int main() {
   int status = 1;     // 0: exit 1: continue
   char *prompt;
   char *old_path = SetTheEnv();
-
+  signal(SIGINT, SIG_IGN);
+  signal(SIGTSTP,SIG_IGN);
   while (1) {
     // print the prompt and read commends
     prompt = genprompt();
-    line = readline(prompt);
+    printf("%s", prompt);
+    line = readline(NULL);
     free(prompt);
     if (line == NULL)
       break;
@@ -240,30 +289,30 @@ int main() {
     if (status == 0) {
       free(joblist);
       free(line);
+      line = NULL;
       Closefiles(joblist);
       continue;
     }
     // execute commends
-    int fd = fork();
-    if (fd < 0) {
-      perror("fork error");
-    } else if (fd == 0) {
-      status = execute_cmd(joblist);
-      exit(status);
-    } else {
-      Closefiles(joblist);
-      // if do not work in background, wait it exit
-      if (background == 0) {
-        waitpid(fd, &status, 0);
-        if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
-          break;
-        } else {
-          // printf("OK\n");
-        }
+    if (background == 1) {
+      int fd = fork();
+      if (fd < 0) {
+        perror("fork error");
+      } else if (fd == 0) {
+        status = execute_cmd(joblist, background);
+        exit(status);
       } else {
+        Closefiles(joblist);
         printf("(%d) %s\n", fd, joblist[0].commends[0]);
+        background = 0;
       }
-      background = 0;
+    } else {
+      status = execute_cmd(joblist, background);
+      if (status == -1) {
+        free(joblist);
+        free(line);
+        break;
+      }
     }
     free(joblist);
     free(line);

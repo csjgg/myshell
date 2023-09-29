@@ -1,3 +1,7 @@
+/*
+*  This file is too bad, but i donot have time to modify it.
+*/
+
 #include <dirent.h>
 #include <grp.h>
 #include <pwd.h>
@@ -87,6 +91,7 @@ int main(int argc, char **argv) {
             printf("\n");
           }
           filenum++;
+          free(filenames[j]);
         } else {
           outputfile_l(path, filenames[j]);
           free(filenames[j]);
